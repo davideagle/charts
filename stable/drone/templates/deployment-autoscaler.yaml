@@ -1,0 +1,147 @@
+{{- if .Values.autoscaler.enabled -}}
+{{- $fullName := include "drone.fullname" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "drone.fullname" . }}-autoscaler
+  labels:
+    app: {{ template "drone.name" . }}
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+    component: autoscaler
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ template "drone.name" . }}
+      release: "{{ .Release.Name }}"
+      component: autoscaler
+  replicas: {{ .Values.autoscaler.replicas }}
+  template:
+    metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+{{- if .Values.autoscaler.annotations }}
+{{ toYaml .Values.autoscaler.annotations | indent 8 }}
+{{- end }}
+      labels:
+        app: {{ template "drone.name" . }}
+        release: "{{ .Release.Name }}"
+        component: autoscaler
+    spec:
+{{- if .Values.autoscaler.schedulerName }}
+      schedulerName: "{{ .Values.autoscaler.schedulerName }}"
+{{- end }}
+{{- if .Values.autoscaler.affinity }}
+      affinity:
+{{ toYaml .Values.autoscaler.affinity | indent 8 }}
+{{- end }}
+{{- if .Values.autoscaler.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.autoscaler.nodeSelector | indent 8 }}
+{{- end }}
+{{- with .Values.autoscaler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 6 }}
+{{- end }}
+      serviceAccountName: {{ template "drone.serviceAccountName" . }}
+      containers:
+      - name: autoscaler
+        image: "{{ .Values.images.autoscaler.repository }}:{{ .Values.images.autoscaler.tag }}"
+        imagePullPolicy: {{ .Values.images.autoscaler.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        env:
+          - name: DRONE_AGENT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ template "drone.fullname" . }}
+                key: secret
+          {{- range $key, $value := .Values.autoscaler.env }}
+          - name: {{ $key }}
+            value: {{ $value | quote }}
+          {{- end }}
+          - name: DRONE_POOL_MIN
+            value: "{{ .Values.autoscaler.pool.min }}"
+          - name: DRONE_POOL_MAX
+            value: "{{ .Values.autoscaler.pool.max }}"
+          - name: DRONE_SERVER_PROTO
+            value: "{{ default "http" .Values.autoscaler.server.protocol }}"
+          - name: DRONE_SERVER_HOST
+            value: "{{ default $fullName .Values.autoscaler.server.host }}"
+          - name: DRONE_AGENT_VOLUMES
+            value: "{{ .Values.autoscaler.agent_volumes }}"
+{{- if .Values.autoscaler.aws.enabled }}
+          - name: DRONE_AMAZON_SUBNET_ID
+            value: "{{ .Values.autoscaler.aws.subnet_id }}"
+          - name: DRONE_AMAZON_SECURITY_GROUP
+            value: "{{ .Values.autoscaler.aws.security_group }}"
+          - name: DRONE_AMAZON_SSHKEY
+            value: "{{ .Values.autoscaler.aws.sshkey }}"
+          - name: DRONE_AMAZON_REGION
+            value: "{{ .Values.autoscaler.aws.region }}"
+          - name: DRONE_AMAZON_INSTANCE
+            value: "{{ .Values.autoscaler.aws.instance_type }}"
+          - name: DRONE_AMAZON_TAGS
+            value: "{{ .Values.autoscaler.aws.tags }}"
+          - name: DRONE_AMAZON_PRIVATE_IP
+            value: "{{ .Values.autoscaler.aws.private_ip }}"
+{{- end }}
+          {{- range $secret, $keys := .Values.autoscaler.envSecrets }}
+          {{- range $keys }}
+          - name: {{ . }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ $secret }}
+                key: {{ . | quote }}
+          {{- end }}
+          {{- end }}
+        volumeMounts:
+          - name: data
+            mountPath: /data
+        {{- with .Values.autoscaler.volumeMounts }}
+            {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ template "drone.fullname" . }}-autoscaler
+      {{- with .Values.autoscaler.volumes }}
+          {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ template "drone.fullname" . }}-autoscaler
+spec:
+  accessModes:
+    - "ReadWriteOnce"
+  resources:
+    requests:
+      storage: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    component: autoscaler
+    app: {{ template "drone.name" . }}
+    release: "{{ .Release.Name }}"
+  name: {{ $fullName }}-autoscaler
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+  selector:
+    component: autoscaler
+    release: "{{ .Release.Name }}"
+    app: {{ template "drone.name" . }}
+    release: "{{ .Release.Name }}"
+  type: ClusterIP
+{{- end -}}
